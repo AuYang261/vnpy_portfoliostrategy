@@ -14,6 +14,7 @@ class StrategyTemplate(ABC):
 
     author: str = ""
     parameters: list = []
+    default_variables: list = []
     variables: list = []
 
     def __init__(
@@ -42,10 +43,12 @@ class StrategyTemplate(ABC):
 
         # 复制变量名列表，插入默认变量内容
         self.variables: list = copy(self.variables)
-        self.variables.insert(0, "inited")
-        self.variables.insert(1, "trading")
-        self.variables.insert(2, "pos_data")
-        self.variables.insert(3, "target_data")
+        self.default_variables: list = [
+            "inited",
+            "trading",
+            "pos_data",
+            "target_data",
+        ]
 
         # 设置策略参数
         self.update_setting(setting)
@@ -78,6 +81,13 @@ class StrategyTemplate(ABC):
             strategy_variables[name] = getattr(self, name)
         return strategy_variables
 
+    def get_default_variables(self) -> dict:
+        """查询策略默认变量"""
+        strategy_variables: dict = {}
+        for name in self.default_variables:
+            strategy_variables[name] = getattr(self, name)
+        return strategy_variables
+
     def get_data(self) -> dict:
         """查询策略状态数据"""
         strategy_data: dict = {
@@ -86,6 +96,7 @@ class StrategyTemplate(ABC):
             "class_name": self.__class__.__name__,
             "author": self.author,
             "parameters": self.get_parameters(),
+            "default_variables": self.get_default_variables(),
             "variables": self.get_variables(),
         }
         return strategy_data
@@ -172,8 +183,19 @@ class StrategyTemplate(ABC):
 
     def cancel_all(self) -> None:
         """全撤活动委托"""
+        # 上次撤单的委托号还在active，说明撤单失败，可能是根本没有提交成功，先移除它
+        # 可改进：提交成功和撤单成功都要有反馈，比如发一个event，确认成功再加入或移除出active_orderids
+        # 这样需要修改交易接口模块vnctptdapi，是一个动态链接库，不好改，但理论上这个事件是vnpy的概念，怎么跟交易接口绑定呢？
+        # 再检查一下EVENT_ORDER事件的触发时机，是不是可以用来确认撤单成功与否
+        # 或者检查一下，确保send_order要确认提交成功后才加入active_orderids，目前send_order即使提交失败也加入了active_orderids
+        if (
+            getattr(self, "last_orderid", None) is not None
+            and self.last_orderid in self.active_orderids
+        ):
+            self.active_orderids.remove(self.last_orderid)
         for vt_orderid in list(self.active_orderids):
             self.cancel_order(vt_orderid)
+            self.last_orderid = vt_orderid
 
     def get_pos(self, vt_symbol: str) -> int:
         """查询当前持仓"""
@@ -300,3 +322,13 @@ class StrategyTemplate(ABC):
         """同步策略状态数据到文件"""
         if self.trading:
             self.strategy_engine.sync_strategy_data(self)
+
+    def close_all_positions(self) -> None:
+        """平掉所有持仓"""
+        self.cancel_all()
+
+        for vt_symbol in self.vt_symbols:
+            self.set_target(vt_symbol, 0)
+        self.write_log(
+            "target_data置为0，下一次on_bar平掉所有持仓，再次初始化恢复target_data"
+        )

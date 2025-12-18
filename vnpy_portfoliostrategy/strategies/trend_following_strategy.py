@@ -1,4 +1,5 @@
 from datetime import datetime
+import numpy as np
 
 from vnpy.trader.utility import ArrayManager
 from vnpy.trader.object import TickData, BarData
@@ -18,7 +19,6 @@ class TrendFollowingStrategy(StrategyTemplate):
     rsi_window = 5
     rsi_entry = 16
     trailing_percent = 0.8
-    fixed_size = 1
     price_add = 5
 
     rsi_buy = 0
@@ -31,11 +31,14 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_window",
         "rsi_entry",
         "trailing_percent",
-        "fixed_size"
     ]
     variables = [
+        "atr_data",
+        "atr_ma",
         "rsi_buy",
-        "rsi_sell"
+        "rsi_sell",
+        "rsi_data",
+        "fixed_size",
     ]
 
     def __init__(
@@ -43,7 +46,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         strategy_engine: StrategyEngine,
         strategy_name: str,
         vt_symbols: list[str],
-        setting: dict
+        setting: dict,
     ) -> None:
         """构造函数"""
         super().__init__(strategy_engine, strategy_name, vt_symbols, setting)
@@ -53,6 +56,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.atr_ma: dict[str, float] = {}
         self.intra_trade_high: dict[str, float] = {}
         self.intra_trade_low: dict[str, float] = {}
+        self.fixed_size: dict[str, int] = {}
 
         self.last_tick_time: datetime | None = None
 
@@ -98,7 +102,7 @@ class TrendFollowingStrategy(StrategyTemplate):
 
             atr_array = am.atr(self.atr_window, array=True)
             self.atr_data[vt_symbol] = atr_array[-1]
-            self.atr_ma[vt_symbol] = atr_array[-self.atr_ma_window:].mean()
+            self.atr_ma[vt_symbol] = atr_array[-self.atr_ma_window :].mean()
             self.rsi_data[vt_symbol] = am.rsi(self.rsi_window)
 
             current_pos = self.get_pos(vt_symbol)
@@ -107,27 +111,41 @@ class TrendFollowingStrategy(StrategyTemplate):
                 self.intra_trade_low[vt_symbol] = bar.low_price
 
                 if self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]:
+                    # 根据ATR均值计算固定仓位大小
+                    self.fixed_size[vt_symbol] = (
+                        int(np.max(list(self.atr_ma.values())) / self.atr_ma[vt_symbol])
+                        if self.atr_ma[vt_symbol] > 0
+                        else 1
+                    )
                     if self.rsi_data[vt_symbol] > self.rsi_buy:
-                        self.set_target(vt_symbol, self.fixed_size)
+                        self.set_target(vt_symbol, self.fixed_size[vt_symbol])
                     elif self.rsi_data[vt_symbol] < self.rsi_sell:
-                        self.set_target(vt_symbol, -self.fixed_size)
+                        self.set_target(vt_symbol, -self.fixed_size[vt_symbol])
                     else:
                         self.set_target(vt_symbol, 0)
 
             elif current_pos > 0:
-                self.intra_trade_high[vt_symbol] = max(self.intra_trade_high[vt_symbol], bar.high_price)
+                self.intra_trade_high[vt_symbol] = max(
+                    self.intra_trade_high[vt_symbol], bar.high_price
+                )
                 self.intra_trade_low[vt_symbol] = bar.low_price
 
-                long_stop = self.intra_trade_high[vt_symbol] * (1 - self.trailing_percent / 100)
+                long_stop = self.intra_trade_high[vt_symbol] * (
+                    1 - self.trailing_percent / 100
+                )
 
                 if bar.close_price <= long_stop:
                     self.set_target(vt_symbol, 0)
 
             elif current_pos < 0:
-                self.intra_trade_low[vt_symbol] = min(self.intra_trade_low[vt_symbol], bar.low_price)
+                self.intra_trade_low[vt_symbol] = min(
+                    self.intra_trade_low[vt_symbol], bar.low_price
+                )
                 self.intra_trade_high[vt_symbol] = bar.high_price
 
-                short_stop = self.intra_trade_low[vt_symbol] * (1 + self.trailing_percent / 100)
+                short_stop = self.intra_trade_low[vt_symbol] * (
+                    1 + self.trailing_percent / 100
+                )
 
                 if bar.close_price >= short_stop:
                     self.set_target(vt_symbol, 0)
@@ -136,7 +154,9 @@ class TrendFollowingStrategy(StrategyTemplate):
 
         self.put_event()
 
-    def calculate_price(self, vt_symbol: str, direction: Direction, reference: float) -> float:
+    def calculate_price(
+        self, vt_symbol: str, direction: Direction, reference: float
+    ) -> float:
         """计算调仓委托价格（支持按需重载实现）"""
         if direction == Direction.LONG:
             price: float = reference + self.price_add

@@ -156,6 +156,9 @@ class StrategyEngine(BaseEngine):
 
         self.call_strategy_func(strategy, strategy.update_trade, trade)
 
+        # 同步策略数据
+        self.put_strategy_event(strategy)
+
     def send_order(
         self,
         strategy: StrategyTemplate,
@@ -259,6 +262,10 @@ class StrategyEngine(BaseEngine):
         # 通过接口、数据服务、数据库获取历史数据
         for vt_symbol in vt_symbols:
             data: list[BarData] = self.load_bar(vt_symbol, days, interval)
+            if not data:
+                self.write_log(
+                    _("加载历史数据失败，合约：{}").format(vt_symbol), strategy
+                )
 
             for bar in data:
                 dts_set.add(bar.datetime)
@@ -375,8 +382,8 @@ class StrategyEngine(BaseEngine):
         strategy: StrategyTemplate = self.strategies[strategy_name]
 
         if strategy.inited:
-            self.write_log(_("{}已经完成初始化，禁止重复操作").format(strategy_name))
-            return
+            self.write_log(_("{}已经完成初始化，重新初始化").format(strategy_name))
+            # return
 
         self.write_log(_("{}开始执行初始化").format(strategy_name))
 
@@ -386,15 +393,14 @@ class StrategyEngine(BaseEngine):
         # 恢复策略状态
         data: dict | None = self.strategy_data.get(strategy_name, None)
         if data:
-            for name in strategy.variables:
+            for name in strategy.default_variables:
                 value: object | None = data.get(name, None)
                 if value is None:
                     continue
 
                 # 对于持仓和目标数据字典，需要使用dict.update更新defaultdict
                 if name in {"pos_data", "target_data"}:
-                    strategy_data = getattr(strategy, name)
-                    strategy_data.update(value)
+                    getattr(strategy, name).update(value)
                 # 对于其他int/float/str/bool字段则可以直接赋值
                 else:
                     setattr(strategy, name, value)
@@ -484,6 +490,21 @@ class StrategyEngine(BaseEngine):
 
         return True
 
+    def close_all_positions(self, strategy_name: str) -> None:
+        """对策略平仓"""
+        strategy: StrategyTemplate = self.strategies[strategy_name]
+        if not strategy.trading:
+            return
+
+        # 撤销全部委托
+        self.cancel_all(strategy)
+
+        # 调用策略close_all_positions函数
+        self.call_strategy_func(strategy, strategy.close_all_positions)
+
+        # 推送策略事件通完成状态
+        self.put_strategy_event(strategy)
+
     def load_strategy_class(self) -> None:
         """加载策略类"""
         path1: Path = Path(__file__).parent.joinpath("strategies")
@@ -520,11 +541,17 @@ class StrategyEngine(BaseEngine):
 
     def sync_strategy_data(self, strategy: StrategyTemplate) -> None:
         """保存策略数据到文件"""
-        data: dict = strategy.get_variables()
-        data.pop("inited")      # 不保存策略状态信息
-        data.pop("trading")
+        default_data: dict = strategy.get_default_variables()
+        default_data.pop("inited")  # 不保存策略状态信息
+        default_data.pop("trading")
+        # # target_data是实时计算生成的，不从文件恢复
+        # # 但由于初始化时load_bars只能获取历史数据，没法获取实时数据
+        # # 所以还是保存上次停止时的target_data
+        # default_data.pop("target_data")
+        # data: dict = strategy.get_variables()
+        # data.update(default_data)
 
-        self.strategy_data[strategy.strategy_name] = data
+        self.strategy_data[strategy.strategy_name] = default_data
         save_json(self.data_filename, self.strategy_data)
 
     def get_all_strategy_class_names(self) -> list:

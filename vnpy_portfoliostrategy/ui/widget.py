@@ -171,7 +171,6 @@ class StrategyManager(QtWidgets.QFrame):
 
     def init_ui(self) -> None:
         """初始化界面"""
-        self.setFixedHeight(300)
         self.setFrameShape(self.Shape.Box)
         self.setLineWidth(1)
 
@@ -192,6 +191,10 @@ class StrategyManager(QtWidgets.QFrame):
         self.remove_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("移除"))
         self.remove_button.clicked.connect(self.remove_strategy)
 
+        self.cover_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("平仓"))
+        self.cover_button.clicked.connect(self.cover_strategy)
+        self.cover_button.setEnabled(False)
+
         strategy_name: str = self._data["strategy_name"]
         class_name: str = self._data["class_name"]
         author: str = self._data["author"]
@@ -203,7 +206,21 @@ class StrategyManager(QtWidgets.QFrame):
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
         self.parameters_monitor: DataMonitor = DataMonitor(self._data["parameters"])
+        self.default_variables_monitor: DataMonitor = DataMonitor(
+            self._data["default_variables"]
+        )
         self.variables_monitor: DataMonitor = DataMonitor(self._data["variables"])
+
+        for table in (
+            self.parameters_monitor,
+            self.default_variables_monitor,
+            self.variables_monitor,
+        ):
+            table.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Minimum,
+            )
+            table.adjust_height()
 
         hbox: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox.addWidget(self.init_button)
@@ -211,11 +228,13 @@ class StrategyManager(QtWidgets.QFrame):
         hbox.addWidget(self.stop_button)
         hbox.addWidget(self.edit_button)
         hbox.addWidget(self.remove_button)
+        hbox.addWidget(self.cover_button)
 
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.addWidget(label)
         vbox.addLayout(hbox)
         vbox.addWidget(self.parameters_monitor)
+        vbox.addWidget(self.default_variables_monitor)
         vbox.addWidget(self.variables_monitor)
         self.setLayout(vbox)
 
@@ -224,27 +243,35 @@ class StrategyManager(QtWidgets.QFrame):
         self._data = data
 
         self.parameters_monitor.update_data(data["parameters"])
+        self.default_variables_monitor.update_data(data["default_variables"])
         self.variables_monitor.update_data(data["variables"])
 
+        self.parameters_monitor.adjust_height()
+        self.default_variables_monitor.adjust_height()
+        self.variables_monitor.adjust_height()
+
         # 更新按钮状态
-        variables: dict = data["variables"]
-        inited: bool = variables["inited"]
-        trading: bool = variables["trading"]
+        default_variables: dict = data["default_variables"]
+        inited: bool = default_variables["inited"]
+        trading: bool = default_variables["trading"]
 
         if not inited:
             return
-        self.init_button.setEnabled(False)
 
         if trading:
+            self.init_button.setEnabled(False)
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.edit_button.setEnabled(False)
             self.remove_button.setEnabled(False)
+            self.cover_button.setEnabled(True)
         else:
+            self.init_button.setEnabled(True)
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.edit_button.setEnabled(True)
             self.remove_button.setEnabled(True)
+            self.cover_button.setEnabled(False)
 
     def init_strategy(self) -> None:
         """初始化策略"""
@@ -278,6 +305,10 @@ class StrategyManager(QtWidgets.QFrame):
         if result:
             self.strategy_manager.remove_strategy(self.strategy_name)
 
+    def cover_strategy(self) -> None:
+        """移除策略"""
+        self.strategy_engine.close_all_positions(self.strategy_name)
+
 
 class DataMonitor(QtWidgets.QTableWidget):
     """策略监控组件"""
@@ -299,10 +330,13 @@ class DataMonitor(QtWidgets.QTableWidget):
 
         self.setRowCount(1)
         self.verticalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.ResizeMode.Stretch
+            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         self.verticalHeader().setVisible(False)
         self.setEditTriggers(self.EditTrigger.NoEditTriggers)
+
+        # 开启单元格自动换行
+        self.setWordWrap(True)
 
         for column, name in enumerate(self._data.keys()):
             value = self._data[name]
@@ -313,12 +347,46 @@ class DataMonitor(QtWidgets.QTableWidget):
             self.setItem(0, column, cell)
             self.cells[name] = cell
 
+        self.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        # 初始根据内容调整行高
+        self.resizeRowsToContents()
+        self.adjust_height()
+
+    def adjust_height(self) -> None:
+        """根据当前内容计算并设置所需最小高度，使其随多行文本自适应"""
+        # 只有一行数据：行高 + 表头高 + 边框和滚动条的预留
+        row_heights = sum(self.rowHeight(r) for r in range(self.rowCount()))
+        header_h = (
+            self.horizontalHeader().height()
+            if self.horizontalHeader().isVisible()
+            else 0
+        )
+        frame = self.frameWidth() * 2
+        # 额外留一点空间避免裁剪
+        extra = 0
+        needed_h = row_heights + header_h + frame + extra
+        self.setFixedHeight(needed_h)
+
     def update_data(self, data: dict) -> None:
         """更新数据"""
         for name, value in data.items():
             cell: QtWidgets.QTableWidgetItem = self.cells[name]
-            cell.setText(str(value))
-
+            if isinstance(value, dict):
+                lines: list[str] = [
+                    f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}"
+                    for k, v in value.items()
+                ]
+                lines.sort()
+                value_str = "\n".join(lines)
+            elif isinstance(value, float):
+                value_str = f"{value:.2f}"
+            else:
+                value_str = str(value)
+            cell.setText(value_str)
+        # 依据最新内容调整本行高度
+        self.resizeRowsToContents()
 
 class LogMonitor(BaseMonitor):
     """日志监控组件"""
