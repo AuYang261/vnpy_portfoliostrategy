@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from functools import lru_cache, partial
 from copy import copy
 import traceback
+import math
 
 import numpy as np
 import plotly.graph_objects as go
@@ -304,7 +305,7 @@ class BacktestingEngine:
         max_ddpercent: float = 0
         max_drawdown_duration: int = 0
         total_net_pnl: float = 0
-        daily_net_pnl: float = 0
+        daily_net_pnl: float = -math.inf
         total_commission: float = 0
         daily_commission: float = 0
         total_slippage: float = 0
@@ -313,12 +314,12 @@ class BacktestingEngine:
         daily_turnover: float = 0
         total_trade_count: int = 0
         daily_trade_count: float = 0
-        total_return: float = 0
+        total_return: float = -math.inf
         annual_return: float = 0
         daily_return: float = 0
         return_std: float = 0
-        sharpe_ratio: float = 0
-        return_drawdown_ratio: float = 0
+        sharpe_ratio: float = -math.inf
+        return_drawdown_ratio: float = -math.inf
 
         # 检查是否发生过爆仓
         positive_balance: bool = False
@@ -450,10 +451,11 @@ class BacktestingEngine:
         }
 
         # 过滤极值
-        for key, value in statistics.items():
-            if value in (np.inf, -np.inf):
-                value = 0
-            statistics[key] = np.nan_to_num(value)
+        if positive_balance:
+            for key, value in statistics.items():
+                if value in (np.inf, -np.inf):
+                    value = 0
+                statistics[key] = np.nan_to_num(value)
 
         self.output(_("策略统计指标计算完成"))
         return statistics
@@ -945,10 +947,15 @@ def evaluate(
     priceticks: dict[str, float],
     capital: float,
     end: datetime,
-    setting: dict
+    setting: dict,
 ) -> tuple:
     """包装回测相关函数以供进程池内运行"""
+    import warnings
+
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+
     engine: BacktestingEngine = BacktestingEngine()
+    engine.output = lambda msg: None  # Disable engine internal output
 
     engine.set_parameters(
         vt_symbols=vt_symbols,
@@ -986,7 +993,7 @@ def wrap_evaluate(engine: BacktestingEngine, target_name: str) -> Callable:
         engine.sizes,
         engine.priceticks,
         engine.capital,
-        engine.end
+        engine.end,
     )
     return func
 
