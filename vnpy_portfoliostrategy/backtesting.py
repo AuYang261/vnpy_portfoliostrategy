@@ -19,7 +19,7 @@ from vnpy.trader.optimize import (
     OptimizationSetting,
     check_optimization_setting,
     run_bf_optimization,
-    run_ga_optimization
+    run_ga_optimization,
 )
 
 from .base import EngineType
@@ -102,7 +102,7 @@ class BacktestingEngine:
         capital: float = 0,
         end: datetime | None = None,
         risk_free: float = 0,
-        annual_days: int = 240
+        annual_days: int = 240,
     ) -> None:
         """设置参数"""
         self.vt_symbols = vt_symbols
@@ -123,7 +123,9 @@ class BacktestingEngine:
         self.risk_free = risk_free
         self.annual_days = annual_days
 
-    def add_strategy(self, strategy_class: type[StrategyTemplate], setting: dict) -> None:
+    def add_strategy(
+        self, strategy_class: type[StrategyTemplate], setting: dict
+    ) -> None:
         """增加策略"""
         self.strategy_class = strategy_class
         self.strategy = strategy_class(
@@ -161,10 +163,7 @@ class BacktestingEngine:
                     end = min(end, self.end)
 
                     data: list[BarData] = load_bar_data(
-                        vt_symbol,
-                        self.interval,
-                        start,
-                        end
+                        vt_symbol, self.interval, start, end
                     )
 
                     for bar in data:
@@ -175,19 +174,16 @@ class BacktestingEngine:
                     progress += progress_delta / total_delta
                     progress = min(progress, 1)
                     progress_bar = "#" * int(progress * 10)
-                    self.output(_("{}加载进度：{} [{:.0%}]").format(
-                        vt_symbol, progress_bar, progress
-                    ))
+                    self.output(
+                        _("{}加载进度：{} [{:.0%}]").format(
+                            vt_symbol, progress_bar, progress
+                        )
+                    )
 
                     start = end + interval_delta
-                    end += (progress_delta + interval_delta)
+                    end += progress_delta + interval_delta
             else:
-                data = load_bar_data(
-                    vt_symbol,
-                    self.interval,
-                    self.start,
-                    self.end
-                )
+                data = load_bar_data(vt_symbol, self.interval, self.start, self.end)
 
                 for bar in data:
                     self.dts.add(bar.datetime)
@@ -195,7 +191,9 @@ class BacktestingEngine:
 
                 data_count = len(data)
 
-            self.output(_("{}历史数据加载完成，数据量：{}").format(vt_symbol, data_count))
+            self.output(
+                _("{}历史数据加载完成，数据量：{}").format(vt_symbol, data_count)
+            )
 
         self.output(_("所有历史数据加载完成"))
 
@@ -273,9 +271,15 @@ class BacktestingEngine:
 
         for daily_result in self.daily_results.values():
             fields: list = [
-                "date", "trade_count", "turnover",
-                "commission", "slippage", "trading_pnl",
-                "holding_pnl", "total_pnl", "net_pnl"
+                "date",
+                "trade_count",
+                "turnover",
+                "commission",
+                "slippage",
+                "trading_pnl",
+                "holding_pnl",
+                "total_pnl",
+                "net_pnl",
             ]
             for key in fields:
                 value = getattr(daily_result, key)
@@ -328,7 +332,9 @@ class BacktestingEngine:
         if df is not None:
             df["balance"] = df["net_pnl"].cumsum() + self.capital
             df["return"] = np.log(df["balance"] / df["balance"].shift(1)).fillna(0)
-            df["highlevel"] = df["balance"].rolling(min_periods=1, window=len(df), center=False).max()
+            df["highlevel"] = (
+                df["balance"].rolling(min_periods=1, window=len(df), center=False).max()
+            )
             df["drawdown"] = df["balance"] - df["highlevel"]
             df["ddpercent"] = df["drawdown"] / df["highlevel"] * 100
 
@@ -344,7 +350,7 @@ class BacktestingEngine:
 
             total_days = len(df)
             profit_days = len(df[df["net_pnl"] > 0])
-            loss_days= len(df[df["net_pnl"] < 0])
+            loss_days = len(df[df["net_pnl"] < 0])
 
             end_balance = df["balance"].iloc[-1]
             max_drawdown = df["drawdown"].min()
@@ -352,7 +358,7 @@ class BacktestingEngine:
             max_drawdown_end = df["drawdown"].idxmin()
 
             if isinstance(max_drawdown_end, date):
-                max_drawdown_start = df["balance"][:max_drawdown_end].idxmax()          # type: ignore
+                max_drawdown_start = df["balance"][:max_drawdown_end].idxmax()  # type: ignore
                 max_drawdown_duration = (max_drawdown_end - max_drawdown_start).days
             else:
                 max_drawdown_duration = 0
@@ -379,7 +385,11 @@ class BacktestingEngine:
 
             if return_std:
                 daily_risk_free: float = self.risk_free / np.sqrt(self.annual_days)
-                sharpe_ratio = (daily_return - daily_risk_free) / return_std * np.sqrt(self.annual_days)
+                sharpe_ratio = (
+                    (daily_return - daily_risk_free)
+                    / return_std
+                    * np.sqrt(self.annual_days)
+                )
             else:
                 sharpe_ratio = 0
 
@@ -472,22 +482,19 @@ class BacktestingEngine:
             rows=4,
             cols=1,
             subplot_titles=["Balance", "Drawdown", "Daily Pnl", "Pnl Distribution"],
-            vertical_spacing=0.06
+            vertical_spacing=0.06,
         )
 
         balance_line = go.Scatter(
-            x=df.index,
-            y=df["balance"],
-            mode="lines",
-            name="Balance"
+            x=df.index, y=df["balance"], mode="lines", name="Balance"
         )
         drawdown_scatter = go.Scatter(
             x=df.index,
             y=df["drawdown"],
             fillcolor="red",
-            fill='tozeroy',
+            fill="tozeroy",
             mode="lines",
-            name="Drawdown"
+            name="Drawdown",
         )
         pnl_bar = go.Bar(y=df["net_pnl"], name="Daily Pnl")
         pnl_histogram = go.Histogram(x=df["net_pnl"], nbinsx=100, name="Days")
@@ -504,7 +511,7 @@ class BacktestingEngine:
         self,
         optimization_setting: OptimizationSetting,
         output: bool = True,
-        max_workers: int | None = None
+        max_workers: int | None = None,
     ) -> list:
         """暴力穷举优化"""
         if not check_optimization_setting(optimization_setting):
@@ -533,7 +540,7 @@ class BacktestingEngine:
         optimization_setting: OptimizationSetting,
         max_workers: int | None = None,
         ngen: int = 30,
-        output: bool = True
+        output: bool = True,
     ) -> list:
         """遗传算法优化"""
         if not check_optimization_setting(optimization_setting):
@@ -546,7 +553,7 @@ class BacktestingEngine:
             get_target_value,
             max_workers=max_workers,
             ngen=ngen,
-            output=self.output
+            output=self.output,
         )
 
         if output:
@@ -597,7 +604,7 @@ class BacktestingEngine:
                     high_price=old_bar.close_price,
                     low_price=old_bar.close_price,
                     close_price=old_bar.close_price,
-                    gateway_name=old_bar.gateway_name
+                    gateway_name=old_bar.gateway_name,
                 )
                 self.bars[vt_symbol] = bar
 
@@ -671,10 +678,7 @@ class BacktestingEngine:
             self.trades[trade.vt_tradeid] = trade
 
     def load_bars(
-        self,
-        strategy: StrategyTemplate,
-        days: int,
-        interval: Interval
+        self, strategy: StrategyTemplate, days: int, interval: Interval
     ) -> None:
         """加载历史数据"""
         self.days = days
@@ -688,7 +692,7 @@ class BacktestingEngine:
         price: float,
         volume: float,
         lock: bool,
-        net: bool
+        net: bool,
     ) -> list[str]:
         """发送委托"""
         price = round_to(price, self.priceticks[vt_symbol])
@@ -803,7 +807,7 @@ class ContractDailyResult:
         start_pos: float,
         size: float,
         rate: float,
-        slippage: float
+        slippage: float,
     ) -> None:
         """计算盈亏"""
         # 记录昨收盘价
@@ -856,7 +860,9 @@ class PortfolioDailyResult:
         self.contract_results: dict[str, ContractDailyResult] = {}
 
         for vt_symbol, close_price in close_prices.items():
-            self.contract_results[vt_symbol] = ContractDailyResult(result_date, close_price)
+            self.contract_results[vt_symbol] = ContractDailyResult(
+                result_date, close_price
+            )
 
         self.trade_count: int = 0
         self.turnover: float = 0
@@ -890,7 +896,7 @@ class PortfolioDailyResult:
                 start_poses.get(vt_symbol, 0),
                 sizes[vt_symbol],
                 rates[vt_symbol],
-                slippages[vt_symbol]
+                slippages[vt_symbol],
             )
 
             self.trade_count += contract_result.trade_count
@@ -909,28 +915,27 @@ class PortfolioDailyResult:
         self.close_prices.update(close_prices)
 
         for vt_symbol, close_price in close_prices.items():
-            contract_result: ContractDailyResult | None = self.contract_results.get(vt_symbol, None)
+            contract_result: ContractDailyResult | None = self.contract_results.get(
+                vt_symbol, None
+            )
             if contract_result:
                 contract_result.update_close_price(close_price)
             else:
-                self.contract_results[vt_symbol] = ContractDailyResult(self.date, close_price)
+                self.contract_results[vt_symbol] = ContractDailyResult(
+                    self.date, close_price
+                )
 
 
 @lru_cache(maxsize=999)
 def load_bar_data(
-    vt_symbol: str,
-    interval: Interval,
-    start: datetime,
-    end: datetime
+    vt_symbol: str, interval: Interval, start: datetime, end: datetime
 ) -> list[BarData]:
     """通过数据库获取历史数据"""
     symbol, exchange = extract_vt_symbol(vt_symbol)
 
     database: BaseDatabase = get_database()
 
-    bars: list[BarData] = database.load_bar_data(
-        symbol, exchange, interval, start, end
-    )
+    bars: list[BarData] = database.load_bar_data(symbol, exchange, interval, start, end)
 
     return bars
 
