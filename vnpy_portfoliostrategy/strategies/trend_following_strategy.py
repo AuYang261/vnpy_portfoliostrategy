@@ -75,12 +75,12 @@ class TrendFollowingStrategy(StrategyTemplate):
     def on_init(self) -> None:
         """策略初始化回调"""
         self.write_log("策略初始化")
+        self.cnt: dict[str, int] = defaultdict(int)
 
         self.rsi_buy = 50 + self.rsi_entry
         self.rsi_sell = 50 - self.rsi_entry
 
         self.load_bars(10)
-        self.cnt: dict[str, int] = defaultdict(int)
 
     def on_start(self) -> None:
         """策略启动回调"""

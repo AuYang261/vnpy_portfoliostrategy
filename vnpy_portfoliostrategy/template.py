@@ -22,7 +22,7 @@ class StrategyTemplate(ABC):
         strategy_engine: Any,
         strategy_name: str,
         vt_symbols: list[str],
-        setting: dict
+        setting: dict,
     ) -> None:
         """构造函数"""
         self.strategy_engine: Any = strategy_engine
@@ -34,8 +34,8 @@ class StrategyTemplate(ABC):
         self.trading: bool = False
 
         # 持仓数据字典
-        self.pos_data: dict[str, int] = defaultdict(int)        # 实际持仓
-        self.target_data: dict[str, int] = defaultdict(int)     # 目标持仓
+        self.pos_data: dict[str, int] = defaultdict(int)  # 实际持仓
+        self.target_data: dict[str, int] = defaultdict(int)  # 目标持仓
 
         # 委托缓存容器
         self.orders: dict[str, OrderData] = {}
@@ -137,21 +137,57 @@ class StrategyTemplate(ABC):
         if not order.is_active() and order.vt_orderid in self.active_orderids:
             self.active_orderids.remove(order.vt_orderid)
 
-    def buy(self, vt_symbol: str, price: float, volume: float, lock: bool = False, net: bool = False) -> list[str]:
+    def buy(
+        self,
+        vt_symbol: str,
+        price: float,
+        volume: float,
+        lock: bool = False,
+        net: bool = False,
+    ) -> list[str]:
         """买入开仓"""
-        return self.send_order(vt_symbol, Direction.LONG, Offset.OPEN, price, volume, lock, net)
+        return self.send_order(
+            vt_symbol, Direction.LONG, Offset.OPEN, price, volume, lock, net
+        )
 
-    def sell(self, vt_symbol: str, price: float, volume: float, lock: bool = False, net: bool = False) -> list[str]:
+    def sell(
+        self,
+        vt_symbol: str,
+        price: float,
+        volume: float,
+        lock: bool = False,
+        net: bool = False,
+    ) -> list[str]:
         """卖出平仓"""
-        return self.send_order(vt_symbol, Direction.SHORT, Offset.CLOSE, price, volume, lock, net)
+        return self.send_order(
+            vt_symbol, Direction.SHORT, Offset.CLOSE, price, volume, lock, net
+        )
 
-    def short(self, vt_symbol: str, price: float, volume: float, lock: bool = False, net: bool = False) -> list[str]:
+    def short(
+        self,
+        vt_symbol: str,
+        price: float,
+        volume: float,
+        lock: bool = False,
+        net: bool = False,
+    ) -> list[str]:
         """卖出开仓"""
-        return self.send_order(vt_symbol, Direction.SHORT, Offset.OPEN, price, volume, lock, net)
+        return self.send_order(
+            vt_symbol, Direction.SHORT, Offset.OPEN, price, volume, lock, net
+        )
 
-    def cover(self, vt_symbol: str, price: float, volume: float, lock: bool = False, net: bool = False) -> list[str]:
+    def cover(
+        self,
+        vt_symbol: str,
+        price: float,
+        volume: float,
+        lock: bool = False,
+        net: bool = False,
+    ) -> list[str]:
         """买入平仓"""
-        return self.send_order(vt_symbol, Direction.LONG, Offset.CLOSE, price, volume, lock, net)
+        return self.send_order(
+            vt_symbol, Direction.LONG, Offset.CLOSE, price, volume, lock, net
+        )
 
     def send_order(
         self,
@@ -183,19 +219,13 @@ class StrategyTemplate(ABC):
 
     def cancel_all(self) -> None:
         """全撤活动委托"""
-        # 上次撤单的委托号还在active，说明撤单失败，可能是根本没有提交成功，先移除它
+        # 撤单失败，比如可能是根本没有提交成功，就会一直反复撤单，同时也提交不了新的委托且没有提示
         # 可改进：提交成功和撤单成功都要有反馈，比如发一个event，确认成功再加入或移除出active_orderids
         # 这样需要修改交易接口模块vnctptdapi，是一个动态链接库，不好改，但理论上这个事件是vnpy的概念，怎么跟交易接口绑定呢？
         # 再检查一下EVENT_ORDER事件的触发时机，是不是可以用来确认撤单成功与否
         # 或者检查一下，确保send_order要确认提交成功后才加入active_orderids，目前send_order即使提交失败也加入了active_orderids
-        if (
-            getattr(self, "last_orderid", None) is not None
-            and self.last_orderid in self.active_orderids
-        ):
-            self.active_orderids.remove(self.last_orderid)
         for vt_orderid in list(self.active_orderids):
             self.cancel_order(vt_orderid)
-            self.last_orderid = vt_orderid
 
     def get_pos(self, vt_symbol: str) -> int:
         """查询当前持仓"""
@@ -224,9 +254,7 @@ class StrategyTemplate(ABC):
             if diff > 0:
                 # 计算多头委托价
                 order_price: float = self.calculate_price(
-                    vt_symbol,
-                    Direction.LONG,
-                    bar.close_price
+                    vt_symbol, Direction.LONG, bar.close_price
                 )
 
                 # 计算买平和买开数量
@@ -249,9 +277,7 @@ class StrategyTemplate(ABC):
             elif diff < 0:
                 # 计算空头委托价
                 order_price = self.calculate_price(
-                    vt_symbol,
-                    Direction.SHORT,
-                    bar.close_price
+                    vt_symbol, Direction.SHORT, bar.close_price
                 )
 
                 # 计算卖平和卖开数量
@@ -272,10 +298,7 @@ class StrategyTemplate(ABC):
                     self.short(vt_symbol, order_price, short_volume)
 
     def calculate_price(
-        self,
-        vt_symbol: str,
-        direction: Direction,
-        reference: float
+        self, vt_symbol: str, direction: Direction, reference: float
     ) -> float:
         """计算调仓委托价格（支持按需重载实现）"""
         return reference
