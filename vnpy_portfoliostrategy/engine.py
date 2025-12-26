@@ -241,6 +241,14 @@ class StrategyEngine(BaseEngine):
         else:
             return None
 
+    def get_total_capital(self, strategy: StrategyTemplate) -> float:
+        """获取账户总资金"""
+        account = self.main_engine.get_all_accounts()
+        if account:
+            return account[0].available
+        else:
+            return 0.0
+
     def load_bars(
         self, strategy: StrategyTemplate, days: int, interval: Interval
     ) -> None:

@@ -1,5 +1,6 @@
 from datetime import datetime
 import numpy as np
+from collections import defaultdict
 
 from vnpy.trader.utility import ArrayManager
 from vnpy.trader.object import TickData, BarData
@@ -18,11 +19,14 @@ class TrendFollowingStrategy(StrategyTemplate):
     atr_ma_window = 10
     rsi_window = 5
     rsi_entry = 16
-    trailing_percent = 0.8
+    trailing_percent = 0.9
     price_add = 5
 
     rsi_buy = 0
     rsi_sell = 0
+
+    # 单次交易风险敞口
+    risk_per_trade = 1000
 
     parameters = [
         "price_add",
@@ -31,6 +35,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_window",
         "rsi_entry",
         "trailing_percent",
+        "risk_per_trade",
     ]
     variables = [
         "atr_data",
@@ -75,6 +80,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.rsi_sell = 50 - self.rsi_entry
 
         self.load_bars(10)
+        self.cnt: dict[str, int] = defaultdict(int)
 
     def on_start(self) -> None:
         """策略启动回调"""
@@ -92,6 +98,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         """K线切片回调"""
         # 更新K线计算RSI数值
         for vt_symbol, bar in bars.items():
+            self.cnt[vt_symbol] += 1
             am: ArrayManager = self.ams[vt_symbol]
             am.update_bar(bar)
 
@@ -111,12 +118,21 @@ class TrendFollowingStrategy(StrategyTemplate):
                 self.intra_trade_low[vt_symbol] = bar.low_price
 
                 if self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]:
-                    # 根据ATR均值计算固定仓位大小
-                    self.fixed_size[vt_symbol] = (
-                        int(np.max(list(self.atr_ma.values())) / self.atr_ma[vt_symbol])
-                        if self.atr_ma[vt_symbol] > 0
-                        else 1
-                    )
+                    # 根据ATR和风险敞口计算固定仓位大小
+                    atr_value = self.atr_data[vt_symbol]
+                    contract_size = self.get_size(vt_symbol)  # 获取合约乘数
+                    if atr_value > 0 and contract_size > 0:
+                        self.fixed_size[vt_symbol] = int(
+                            max(
+                                1,
+                                self.risk_per_trade / (atr_value * contract_size)
+                                # 通过指数函数防止一开始仓位过大，衰减系数一个月
+                                * (1 - np.exp(-self.cnt[vt_symbol] / 60 / 24 / 30)),
+                            )
+                        )
+                    else:
+                        self.fixed_size[vt_symbol] = 0  # 如果ATR为0，则不开仓
+
                     if self.rsi_data[vt_symbol] > self.rsi_buy:
                         self.set_target(vt_symbol, self.fixed_size[vt_symbol])
                     elif self.rsi_data[vt_symbol] < self.rsi_sell:
@@ -159,8 +175,8 @@ class TrendFollowingStrategy(StrategyTemplate):
     ) -> float:
         """计算调仓委托价格（支持按需重载实现）"""
         if direction == Direction.LONG:
-            price: float = reference + self.price_add
+            price: float = reference + self.price_add * self.get_pricetick(vt_symbol)
         else:
-            price = reference - self.price_add
+            price = reference - self.price_add * self.get_pricetick(vt_symbol)
 
         return price

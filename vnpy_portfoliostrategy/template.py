@@ -304,6 +304,10 @@ class StrategyTemplate(ABC):
         """查询合约乘数"""
         return cast(int, self.strategy_engine.get_size(self, vt_symbol))
 
+    def get_total_capital(self) -> float:
+        """查询总资金"""
+        return cast(float, self.strategy_engine.get_total_capital(self))
+
     def load_bars(self, days: int, interval: Interval = Interval.MINUTE) -> None:
         """加载历史K线数据来执行初始化"""
         self.strategy_engine.load_bars(self, days, interval)

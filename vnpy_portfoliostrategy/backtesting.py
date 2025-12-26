@@ -89,6 +89,7 @@ class BacktestingEngine:
         self.logs.clear()
         self.daily_results.clear()
         self.daily_df = None
+        self.bars.clear()
 
     def set_parameters(
         self,
@@ -751,6 +752,10 @@ class BacktestingEngine:
     def get_size(self, strategy: StrategyTemplate, vt_symbol: str) -> float:
         """获取合约乘数"""
         return self.sizes[vt_symbol]
+
+    def get_total_capital(self, strategy: StrategyTemplate) -> float:
+        """获取账户总资金"""
+        return self.capital
 
     def put_strategy_event(self, strategy: StrategyTemplate) -> None:
         """推送事件更新策略界面"""
