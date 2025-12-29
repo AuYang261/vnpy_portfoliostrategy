@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from threading import Thread
+import time
 from copy import copy
 from collections import defaultdict
 from typing import Any, cast
@@ -52,6 +54,12 @@ class StrategyTemplate(ABC):
 
         # 设置策略参数
         self.update_setting(setting)
+
+        # 定时打印主力合约信息log线程
+        self.dominant_log_thread: Thread = Thread(
+            target=self._log_dominant_thread_func, daemon=True
+        )
+        self.dominant_log_thread.start()
 
     def update_setting(self, setting: dict) -> None:
         """设置策略参数"""
@@ -359,3 +367,37 @@ class StrategyTemplate(ABC):
         self.write_log(
             "target_data置为0，下一次on_bar平掉所有持仓，再次初始化恢复target_data"
         )
+
+    def query_dominant(self) -> list[str]:
+        """查询vt_symbols中各代码的主力合约代码"""
+        import rqdatac
+
+        dominant_list: list[str] = []
+        for vt_symbol in self.vt_symbols:
+            symbol, exchange = vt_symbol.split(".")
+            # 提取前缀代码
+            symbol = "".join(filter(str.isalpha, symbol))
+            symbol = symbol.upper()
+            date = rqdatac.get_future_latest_trading_date().strftime("%Y%m%d")
+            rq_symbol_serial = rqdatac.futures.get_dominant(symbol, start_date=date)
+            if rq_symbol_serial is not None and not rq_symbol_serial.empty:
+                rq_symbol = rq_symbol_serial.loc[date]
+            dominant_vt_symbol = f"{rq_symbol}.{exchange}"
+            dominant_list.append(dominant_vt_symbol)
+
+        return dominant_list
+
+    def _log_dominant_thread_func(self) -> None:
+        """定时打印主力合约信息log线程函数"""
+        last = None
+        while True:
+            # 每天
+            now = time.localtime()
+            if last is None or (now.tm_mday != last.tm_mday and now.tm_hour >= 9):
+                dominant_list = self.query_dominant()
+                if dominant_list:
+                    dominant_str = ", ".join(dominant_list)
+                    self.write_log(f"主力合约：{dominant_str}")
+                    last = now
+            # 间隔1h检查
+            time.sleep(60 * 60)

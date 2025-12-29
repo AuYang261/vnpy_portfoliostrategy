@@ -565,8 +565,8 @@ class StrategyEngine(BaseEngine):
         # # 但由于初始化时load_bars只能获取历史数据，没法获取实时数据
         # # 所以还是保存上次停止时的target_data
         # default_data.pop("target_data")
-        # data: dict = strategy.get_variables()
-        # data.update(default_data)
+        data: dict = strategy.get_variables()
+        default_data.update(data)
 
         self.strategy_data[strategy.strategy_name] = default_data
         save_json(self.data_filename, self.strategy_data)

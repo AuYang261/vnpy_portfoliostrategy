@@ -46,6 +46,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_sell",
         "rsi_data",
         "fixed_size",
+        "cnt",
     ]
 
     def __init__(
@@ -64,6 +65,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.intra_trade_high: dict[str, float] = {}
         self.intra_trade_low: dict[str, float] = {}
         self.fixed_size: dict[str, int] = {}
+        self.cnt: dict[str, int] = defaultdict(int)
 
         self.last_tick_time: datetime | None = None
 
@@ -77,7 +79,6 @@ class TrendFollowingStrategy(StrategyTemplate):
     def on_init(self) -> None:
         """策略初始化回调"""
         self.write_log("策略初始化")
-        self.cnt: dict[str, int] = defaultdict(int)
 
         self.rsi_buy = 50 + self.rsi_entry
         self.rsi_sell = 50 - self.rsi_entry
@@ -123,7 +124,7 @@ class TrendFollowingStrategy(StrategyTemplate):
                     # 根据ATR和风险敞口计算固定仓位大小
                     atr_value = self.atr_data[vt_symbol]
                     contract_size = self.get_size(vt_symbol)  # 获取合约乘数
-                    if atr_value > 0 and contract_size > 0:
+                    if atr_value > 0 and contract_size and contract_size > 0:
                         self.fixed_size[vt_symbol] = int(
                             max(
                                 1,

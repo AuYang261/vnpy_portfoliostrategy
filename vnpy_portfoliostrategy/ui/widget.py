@@ -306,7 +306,7 @@ class StrategyManager(QtWidgets.QFrame):
             self.strategy_manager.remove_strategy(self.strategy_name)
 
     def cover_strategy(self) -> None:
-        """移除策略"""
+        """平仓策略"""
         self.strategy_engine.close_all_positions(self.strategy_name)
 
 
