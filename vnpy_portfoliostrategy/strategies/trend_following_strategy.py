@@ -27,6 +27,8 @@ class TrendFollowingStrategy(StrategyTemplate):
 
     # 单次交易风险敞口
     risk_per_trade = 1000
+    # 敞口衰减系数，通过指数函数1-e^(-x/factor)防止一开始仓位过大，一天约400min可交易
+    decay_factor = 400 * 30
 
     parameters = [
         "price_add",
@@ -125,9 +127,11 @@ class TrendFollowingStrategy(StrategyTemplate):
                         self.fixed_size[vt_symbol] = int(
                             max(
                                 1,
-                                self.risk_per_trade / (atr_value * contract_size)
-                                # 通过指数函数防止一开始仓位过大，衰减系数一个月
-                                * (1 - np.exp(-self.cnt[vt_symbol] / 60 / 24 / 30)),
+                                self.risk_per_trade
+                                / (atr_value * contract_size)
+                                * (
+                                    1 - np.exp(-self.cnt[vt_symbol] / self.decay_factor)
+                                ),
                             )
                         )
                     else:
