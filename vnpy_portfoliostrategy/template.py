@@ -398,6 +398,9 @@ class StrategyTemplate(ABC):
                 if dominant_list:
                     dominant_str = ", ".join(dominant_list)
                     self.write_log(f"主力合约：{dominant_str}")
+                    for vt_symbol in self.vt_symbols:
+                        if vt_symbol.upper() not in dominant_list:
+                            self.write_log(f"注意，当前{vt_symbol} 不是主力合约")
                     last = now
             # 间隔1h检查
             time.sleep(60 * 60)
