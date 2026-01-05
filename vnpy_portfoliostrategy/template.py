@@ -38,18 +38,18 @@ class StrategyTemplate(ABC):
         # 持仓数据字典
         self.pos_data: dict[str, int] = defaultdict(int)  # 实际持仓
         self.target_data: dict[str, int] = defaultdict(int)  # 目标持仓
+        self.cnt: dict[str, int] = defaultdict(int)  # on_bars调用次数
 
         # 委托缓存容器
         self.orders: dict[str, OrderData] = {}
         self.active_orderids: set[str] = set()
 
-        # 复制变量名列表，插入默认变量内容
-        self.variables: list = copy(self.variables)
         self.default_variables: list = [
             "inited",
             "trading",
             "pos_data",
             "target_data",
+            "cnt",
         ]
 
         # 设置策略参数
@@ -246,6 +246,12 @@ class StrategyTemplate(ABC):
     def set_target(self, vt_symbol: str, target: int) -> None:
         """设置目标仓位"""
         self.target_data[vt_symbol] = target
+
+    def add_cnt(self, vt_symbol: str) -> None:
+        self.cnt[vt_symbol] += 1
+
+    def get_cnt(self) -> dict[str, int]:
+        return self.cnt
 
     def rebalance_portfolio(self, bars: dict[str, BarData]) -> None:
         """基于目标执行调仓交易"""

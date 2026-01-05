@@ -46,7 +46,6 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_sell",
         "rsi_data",
         "fixed_size",
-        "cnt",
     ]
 
     def __init__(
@@ -65,7 +64,6 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.intra_trade_high: dict[str, float] = {}
         self.intra_trade_low: dict[str, float] = {}
         self.fixed_size: dict[str, int] = {}
-        self.cnt: dict[str, int] = defaultdict(int)
 
         self.last_tick_time: datetime | None = None
 
@@ -101,7 +99,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         """K线切片回调"""
         # 更新K线计算RSI数值
         for vt_symbol, bar in bars.items():
-            self.cnt[vt_symbol] += 1
+            self.add_cnt(vt_symbol)
             am: ArrayManager = self.ams[vt_symbol]
             am.update_bar(bar)
 
