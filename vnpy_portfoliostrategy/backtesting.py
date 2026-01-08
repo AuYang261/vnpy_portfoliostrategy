@@ -324,6 +324,7 @@ class BacktestingEngine:
         daily_return: float = 0
         return_std: float = 0
         sharpe_ratio: float = -math.inf
+        calmar_ratio: float = -math.inf
         return_drawdown_ratio: float = -math.inf
 
         # 检查是否发生过爆仓
@@ -394,6 +395,10 @@ class BacktestingEngine:
             else:
                 sharpe_ratio = 0
 
+            calmar_ratio = (
+                -annual_return / max_ddpercent if max_ddpercent != 0 else -math.inf
+            )
+
             return_drawdown_ratio = -total_net_pnl / max_drawdown
 
         # 输出结果
@@ -429,7 +434,8 @@ class BacktestingEngine:
 
             self.output(_("日均收益率：\t{:,.2f}%").format(daily_return))
             self.output(_("收益标准差：\t{:,.2f}%").format(return_std))
-            self.output(f"Sharpe Ratio：\t{sharpe_ratio:,.2f}")
+            self.output(_("Sharpe比率：\t{:,.2f}").format(sharpe_ratio))
+            self.output(_("Calmar比率：\t{:,.2f}").format(calmar_ratio))
             self.output(_("收益回撤比：\t{:,.2f}").format(return_drawdown_ratio))
 
         statistics: dict = {
@@ -458,6 +464,7 @@ class BacktestingEngine:
             "daily_return": daily_return,
             "return_std": return_std,
             "sharpe_ratio": sharpe_ratio,
+            "calmar_ratio": calmar_ratio,
             "return_drawdown_ratio": return_drawdown_ratio,
         }
 

@@ -1,10 +1,8 @@
 from datetime import datetime
-import numpy as np
-from collections import defaultdict
 
 from vnpy.trader.utility import ArrayManager
 from vnpy.trader.object import TickData, BarData
-from vnpy.trader.constant import Direction
+from vnpy.trader.constant import Direction, Interval
 
 from vnpy_portfoliostrategy import StrategyTemplate, StrategyEngine
 from vnpy_portfoliostrategy.utility import PortfolioBarGenerator
@@ -21,14 +19,16 @@ class TrendFollowingStrategy(StrategyTemplate):
     rsi_entry = 16
     trailing_percent = 0.9
     price_add = 5
+    trend_filter_window = 60
 
     rsi_buy = 0
     rsi_sell = 0
 
     # 单次交易风险敞口
     risk_per_trade = 1000
-    # 敞口衰减系数，通过指数函数1-e^(-x/factor)防止一开始仓位过大，一天约400min可交易
-    decay_factor = 400 * 30
+    # 敞口衰减系数，通过指数函数1-e^(-x/factor)防止一开始仓位过大，一天约400min/6h可交易
+    # decay_factor = 400 * 30
+    # decay_factor = 6 * 30
 
     parameters = [
         "price_add",
@@ -36,6 +36,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         "atr_ma_window",
         "rsi_window",
         "rsi_entry",
+        "trend_filter_window",
         "trailing_percent",
         "risk_per_trade",
     ]
@@ -70,9 +71,14 @@ class TrendFollowingStrategy(StrategyTemplate):
         # 创建每个合约的ArrayManager
         self.ams: dict[str, ArrayManager] = {}
         for vt_symbol in self.vt_symbols:
-            self.ams[vt_symbol] = ArrayManager()
+            self.ams[vt_symbol] = ArrayManager(size=200)
 
-        self.pbg = PortfolioBarGenerator(self.on_bars)
+        self.pbg = PortfolioBarGenerator(
+            self.on_bars,
+            window=1,
+            on_window_bars=self.on_window_bars,
+            interval=Interval.HOUR,
+        )
 
     def on_init(self) -> None:
         """策略初始化回调"""
@@ -81,7 +87,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.rsi_buy = 50 + self.rsi_entry
         self.rsi_sell = 50 - self.rsi_entry
 
-        self.load_bars(10)
+        self.load_bars(10, interval=Interval.HOUR)
 
     def on_start(self) -> None:
         """策略启动回调"""
@@ -97,77 +103,56 @@ class TrendFollowingStrategy(StrategyTemplate):
 
     def on_bars(self, bars: dict[str, BarData]) -> None:
         """K线切片回调"""
-        # 更新K线计算RSI数值
+        self.pbg.update_bars(bars)
+
+    def on_window_bars(self, bars: dict[str, BarData]) -> None:
+        """小时K线回调"""
         for vt_symbol, bar in bars.items():
             self.add_cnt(vt_symbol)
             am: ArrayManager = self.ams[vt_symbol]
             am.update_bar(bar)
 
-        for vt_symbol, bar in bars.items():
-            am = self.ams[vt_symbol]
             if not am.inited:
-                return
+                continue
 
             atr_array = am.atr(self.atr_window, array=True)
             self.atr_data[vt_symbol] = atr_array[-1]
             self.atr_ma[vt_symbol] = atr_array[-self.atr_ma_window :].mean()
             self.rsi_data[vt_symbol] = am.rsi(self.rsi_window)
+            # 计算均线，用于趋势过滤
+            ma_trend = am.sma(self.trend_filter_window)
 
-            current_pos = self.get_pos(vt_symbol)
-            if current_pos == 0:
-                self.intra_trade_high[vt_symbol] = bar.high_price
-                self.intra_trade_low[vt_symbol] = bar.low_price
+            self.intra_trade_high[vt_symbol] = bar.high_price
+            self.intra_trade_low[vt_symbol] = bar.low_price
 
-                if self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]:
-                    # 根据ATR和风险敞口计算固定仓位大小
-                    atr_value = self.atr_data[vt_symbol]
-                    contract_size = self.get_size(vt_symbol)  # 获取合约乘数
-                    if atr_value > 0 and contract_size and contract_size > 0:
-                        self.fixed_size[vt_symbol] = int(
-                            max(
-                                1,
-                                self.risk_per_trade
-                                / (atr_value * contract_size)
-                                * (
-                                    1 - np.exp(-self.cnt[vt_symbol] / self.decay_factor)
-                                ),
-                            )
-                        )
-                    else:
-                        self.fixed_size[vt_symbol] = 0  # 如果ATR为0，则不开仓
-
-                    if self.rsi_data[vt_symbol] > self.rsi_buy:
-                        self.set_target(vt_symbol, self.fixed_size[vt_symbol])
-                    elif self.rsi_data[vt_symbol] < self.rsi_sell:
-                        self.set_target(vt_symbol, -self.fixed_size[vt_symbol])
-                    else:
-                        self.set_target(vt_symbol, 0)
-
-            elif current_pos > 0:
-                self.intra_trade_high[vt_symbol] = max(
-                    self.intra_trade_high[vt_symbol], bar.high_price
+            # 根据ATR和风险敞口计算固定仓位大小
+            contract_size = self.get_size(vt_symbol)  # 获取合约乘数
+            if self.atr_data[vt_symbol] > 0 and contract_size and contract_size > 0:
+                self.fixed_size[vt_symbol] = int(
+                    max(
+                        1,
+                        self.risk_per_trade
+                        / (self.atr_data[vt_symbol] * contract_size),
+                        # * (1 - np.exp(-self.cnt[vt_symbol] / self.decay_factor)),
+                    )
                 )
-                self.intra_trade_low[vt_symbol] = bar.low_price
+            else:
+                self.fixed_size[vt_symbol] = 0  # 如果ATR过小，则不开仓
 
-                long_stop = self.intra_trade_high[vt_symbol] * (
-                    1 - self.trailing_percent / 100
-                )
-
-                if bar.close_price <= long_stop:
-                    self.set_target(vt_symbol, 0)
-
-            elif current_pos < 0:
-                self.intra_trade_low[vt_symbol] = min(
-                    self.intra_trade_low[vt_symbol], bar.low_price
-                )
-                self.intra_trade_high[vt_symbol] = bar.high_price
-
-                short_stop = self.intra_trade_low[vt_symbol] * (
-                    1 + self.trailing_percent / 100
-                )
-
-                if bar.close_price >= short_stop:
-                    self.set_target(vt_symbol, 0)
+            if (
+                self.fixed_size[vt_symbol] > 0
+                and self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]
+            ):
+                if (
+                    self.rsi_data[vt_symbol] > self.rsi_buy
+                    and bar.close_price > ma_trend
+                ):
+                    self.set_target(vt_symbol, self.fixed_size[vt_symbol])
+                elif (
+                    self.rsi_data[vt_symbol] < self.rsi_sell
+                    and bar.close_price < ma_trend
+                ):
+                    self.set_target(vt_symbol, -self.fixed_size[vt_symbol])
 
         self.rebalance_portfolio(bars)
 

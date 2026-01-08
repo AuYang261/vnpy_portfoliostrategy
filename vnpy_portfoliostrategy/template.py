@@ -374,7 +374,7 @@ class StrategyTemplate(ABC):
             "target_data置为0，下一次on_bar平掉所有持仓，再次初始化恢复target_data"
         )
 
-    def query_dominant(self) -> list[str]:
+    def query_dominant(self) -> list[str] | None:
         """查询vt_symbols中各代码的主力合约代码"""
         import rqdatac
 
@@ -384,7 +384,13 @@ class StrategyTemplate(ABC):
             # 提取前缀代码
             symbol = "".join(filter(str.isalpha, symbol))
             symbol = symbol.upper()
-            date = rqdatac.get_future_latest_trading_date().strftime("%Y%m%d")
+            try:
+                date = rqdatac.get_future_latest_trading_date().strftime("%Y%m%d")
+            except Exception as ex:
+                self.write_log(
+                    f"获取最新交易日期失败，无法查询主力合约，错误信息：{ex}"
+                )
+                return None
             rq_symbol_serial = rqdatac.futures.get_dominant(symbol, start_date=date)
             if rq_symbol_serial is not None and not rq_symbol_serial.empty:
                 rq_symbol = rq_symbol_serial.loc[date]
@@ -397,8 +403,8 @@ class StrategyTemplate(ABC):
         """定时打印主力合约信息log线程函数"""
         last = None
         while True:
-            # 每天
             now = time.localtime()
+            # 每天9点后打印一次
             if last is None or (now.tm_mday != last.tm_mday and now.tm_hour >= 9):
                 dominant_list = self.query_dominant()
                 if dominant_list:

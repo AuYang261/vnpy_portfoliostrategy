@@ -173,6 +173,14 @@ msgstr ""
 msgid "收益标准差：\t{:,.2f}%"
 msgstr ""
 
+#: vnpy_portfoliostrategy\backtesting.py:419
+msgid "Sharpe比率：\t{:,.2f}"
+msgstr ""
+
+#: vnpy_portfoliostrategy\backtesting.py:419
+msgid "Calmar比率：\t{:,.2f}"
+msgstr ""
+
 #: vnpy_portfoliostrategy\backtesting.py:421
 msgid "收益回撤比：\t{:,.2f}"
 msgstr ""
