@@ -1,4 +1,6 @@
 from datetime import datetime
+from collections import defaultdict
+import numpy as np
 
 from vnpy.trader.utility import ArrayManager
 from vnpy.trader.object import TickData, BarData
@@ -13,22 +15,25 @@ class TrendFollowingStrategy(StrategyTemplate):
 
     author = "用Python的交易员"
 
-    atr_window = 22
-    atr_ma_window = 10
-    rsi_window = 5
-    rsi_entry = 16
-    trailing_percent = 0.9
-    price_add = 5
-    trend_filter_window = 60
+    price_add = 49
+    atr_window = 127
+    atr_ma_window = 37
+    rsi_window = 33
+    rsi_entry = 9
+    trend_filter_window = 161
 
     rsi_buy = 0
     rsi_sell = 0
 
     # 单次交易风险敞口
-    risk_per_trade = 1000
+    risk_per_trade = 2000
     # 敞口衰减系数，通过指数函数1-e^(-x/factor)防止一开始仓位过大，一天约400min/6h可交易
     # decay_factor = 400 * 30
     # decay_factor = 6 * 30
+
+    # 设定一个很宽的止损幅度用来保命止损，防止趋势突然反转，rsi信号滞后而失效
+    # 通常趋势回调不会超过这个数，5倍 ATR 几乎就是大趋势反转了
+    stop_factor = 5
 
     parameters = [
         "price_add",
@@ -37,8 +42,8 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_window",
         "rsi_entry",
         "trend_filter_window",
-        "trailing_percent",
         "risk_per_trade",
+        "stop_factor",
     ]
     variables = [
         "atr_data",
@@ -67,6 +72,10 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.fixed_size: dict[str, int] = {}
 
         self.last_tick_time: datetime | None = None
+
+        # 记录是否触发过保命止损
+        self.long_stopped: dict[str, bool] = defaultdict(bool)
+        self.short_stopped: dict[str, bool] = defaultdict(bool)
 
         # 创建每个合约的ArrayManager
         self.ams: dict[str, ArrayManager] = {}
@@ -122,6 +131,28 @@ class TrendFollowingStrategy(StrategyTemplate):
             # 计算均线，用于趋势过滤
             ma_trend = am.sma(self.trend_filter_window)
 
+            # 如果RSI回归中性，说明旧趋势结束，可以解除止损封锁，允许下次开仓
+            if self.rsi_data[vt_symbol] < self.rsi_buy and self.long_stopped[vt_symbol]:
+                self.long_stopped[vt_symbol] = False  # 多头解锁
+                self.write_log(
+                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 多头止损锁已解除"
+                )
+                print(
+                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 多头止损锁已解除"
+                )
+
+            if (
+                self.rsi_data[vt_symbol] > self.rsi_sell
+                and self.short_stopped[vt_symbol]
+            ):
+                self.short_stopped[vt_symbol] = False  # 空头解锁
+                self.write_log(
+                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 空头止损锁已解除"
+                )
+                print(
+                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 空头止损锁已解除"
+                )
+
             self.intra_trade_high[vt_symbol] = bar.high_price
             self.intra_trade_low[vt_symbol] = bar.low_price
 
@@ -139,20 +170,68 @@ class TrendFollowingStrategy(StrategyTemplate):
             else:
                 self.fixed_size[vt_symbol] = 0  # 如果ATR过小，则不开仓
 
-            if (
-                self.fixed_size[vt_symbol] > 0
-                and self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]
-            ):
+            if self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]:
                 if (
                     self.rsi_data[vt_symbol] > self.rsi_buy
                     and bar.close_price > ma_trend
+                    and not self.long_stopped[vt_symbol]  # 没有被多头止损锁住
                 ):
                     self.set_target(vt_symbol, self.fixed_size[vt_symbol])
                 elif (
                     self.rsi_data[vt_symbol] < self.rsi_sell
                     and bar.close_price < ma_trend
+                    and not self.short_stopped[vt_symbol]  # 没有被空头止损锁住
                 ):
                     self.set_target(vt_symbol, -self.fixed_size[vt_symbol])
+
+            safety_stop_width = self.atr_data[vt_symbol] * self.stop_factor
+
+            current_pos = self.get_pos(vt_symbol)
+
+            # 检查是否触发保命止损
+            if current_pos == 0:
+                # 空仓时，同时重置高低点为当前价格
+                self.intra_trade_high[vt_symbol] = bar.high_price
+                self.intra_trade_low[vt_symbol] = bar.low_price
+            elif current_pos > 0:
+                # 记录持仓期间最高价
+                self.intra_trade_high[vt_symbol] = max(
+                    self.intra_trade_high.get(vt_symbol, 0), bar.high_price
+                )
+                # 将低点重置为当前低点。
+                self.intra_trade_low[vt_symbol] = bar.low_price
+                # 吊灯止损
+                stop_price = self.intra_trade_high[vt_symbol] - safety_stop_width
+
+                if bar.close_price < stop_price:
+                    self.set_target(vt_symbol, 0)  # 强制平仓
+                    # 触发止损后，锁住多头开仓权限
+                    self.long_stopped[vt_symbol] = True
+                    self.write_log(
+                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(多)，暂停做多直到RSI回归中性"
+                    )
+                    print(
+                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(多)，暂停做多直到RSI回归中性"
+                    )
+
+            elif current_pos < 0:
+                self.intra_trade_low[vt_symbol] = min(
+                    self.intra_trade_low.get(vt_symbol, 999999), bar.low_price
+                )
+                # 将高点重置为当前高点。
+                self.intra_trade_high[vt_symbol] = bar.high_price
+                stop_price = self.intra_trade_low[vt_symbol] + safety_stop_width
+
+                if bar.close_price > stop_price:
+                    self.set_target(vt_symbol, 0)  # 强制平仓
+                    # 触发止损后，锁住空头开仓权限
+                    self.short_stopped[vt_symbol] = True
+                    self.write_log(
+                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(空)，暂停做空直到RSI回归中性"
+                    )
+                    print(
+                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(空)，暂停做空直到RSI回归中性"
+                    )
 
         self.rebalance_portfolio(bars)
 
