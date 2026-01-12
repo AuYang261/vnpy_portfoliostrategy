@@ -358,14 +358,10 @@ class DataMonitor(QtWidgets.QTableWidget):
         """根据当前内容计算并设置所需最小高度，使其随多行文本自适应"""
         # 只有一行数据：行高 + 表头高 + 边框和滚动条的预留
         row_heights = sum(self.rowHeight(r) for r in range(self.rowCount()))
-        header_h = (
-            self.horizontalHeader().height()
-            if self.horizontalHeader().isVisible()
-            else 0
-        )
+        header_h = self.horizontalHeader().height()
         frame = self.frameWidth() * 2
         # 额外留一点空间避免裁剪
-        extra = 0
+        extra = 20
         needed_h = row_heights + header_h + frame + extra
         self.setFixedHeight(needed_h)
 

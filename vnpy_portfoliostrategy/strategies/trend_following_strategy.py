@@ -96,7 +96,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.rsi_buy = 50 + self.rsi_entry
         self.rsi_sell = 50 - self.rsi_entry
 
-        self.load_bars(10, interval=Interval.HOUR)
+        self.load_bars(100, interval=Interval.HOUR)
 
     def on_start(self) -> None:
         """策略启动回调"""
