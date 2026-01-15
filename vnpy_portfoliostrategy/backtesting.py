@@ -938,7 +938,14 @@ class PortfolioDailyResult:
                 )
 
 
-@lru_cache(maxsize=999)
+from joblib import Memory
+
+_disk_cache = Memory(location="/home/xjy/quant/.cache/load_bar_data", verbose=0)
+# 清理缓存：rm -rf /home/xjy/quant/.cache/load_bar_data
+
+
+# @lru_cache(maxsize=999)
+@_disk_cache.cache
 def load_bar_data(
     vt_symbol: str, interval: Interval, start: datetime, end: datetime
 ) -> list[BarData]:
@@ -991,6 +998,8 @@ def evaluate(
     engine.run_backtesting()
     engine.calculate_result()
     statistics: dict = engine.calculate_statistics(output=False)
+    engine.history_data.clear()
+    engine.dts.clear()
 
     target_value: float = statistics[target_name]
     return (str(setting), target_value, statistics)

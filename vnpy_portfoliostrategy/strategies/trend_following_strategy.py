@@ -15,25 +15,22 @@ class TrendFollowingStrategy(StrategyTemplate):
 
     author = "用Python的交易员"
 
-    price_add = 49
-    atr_window = 127
-    atr_ma_window = 37
-    rsi_window = 33
-    rsi_entry = 9
-    trend_filter_window = 161
+    price_add = 3
+    atr_window = 16
+    atr_ma_window = 150
+    rsi_window = 29
+    rsi_entry = 11
+    trend_filter_window = 158
+    trailing_percent = 10
 
     rsi_buy = 0
     rsi_sell = 0
 
     # 单次交易风险敞口
-    risk_per_trade = 2000
+    risk_per_trade = 2500
     # 敞口衰减系数，通过指数函数1-e^(-x/factor)防止一开始仓位过大，一天约400min/6h可交易
-    # decay_factor = 400 * 30
-    # decay_factor = 6 * 30
-
-    # 设定一个很宽的止损幅度用来保命止损，防止趋势突然反转，rsi信号滞后而失效
-    # 通常趋势回调不会超过这个数，5倍 ATR 几乎就是大趋势反转了
-    stop_factor = 5
+    # decay_factor = 400 * 30 * 12
+    # decay_factor = 6 * 30 * 12
 
     parameters = [
         "price_add",
@@ -43,7 +40,7 @@ class TrendFollowingStrategy(StrategyTemplate):
         "rsi_entry",
         "trend_filter_window",
         "risk_per_trade",
-        "stop_factor",
+        "trailing_percent",
     ]
     variables = [
         "atr_data",
@@ -67,8 +64,8 @@ class TrendFollowingStrategy(StrategyTemplate):
         self.rsi_data: dict[str, float] = {}
         self.atr_data: dict[str, float] = {}
         self.atr_ma: dict[str, float] = {}
-        self.intra_trade_high: dict[str, float] = {}
-        self.intra_trade_low: dict[str, float] = {}
+        self.intra_trade_high: dict[str, float] = defaultdict(float)
+        self.intra_trade_low: dict[str, float] = defaultdict(float)
         self.fixed_size: dict[str, int] = {}
 
         self.last_tick_time: datetime | None = None
@@ -137,9 +134,6 @@ class TrendFollowingStrategy(StrategyTemplate):
                 self.write_log(
                     f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 多头止损锁已解除"
                 )
-                print(
-                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 多头止损锁已解除"
-                )
 
             if (
                 self.rsi_data[vt_symbol] > self.rsi_sell
@@ -149,12 +143,6 @@ class TrendFollowingStrategy(StrategyTemplate):
                 self.write_log(
                     f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 空头止损锁已解除"
                 )
-                print(
-                    f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 空头止损锁已解除"
-                )
-
-            self.intra_trade_high[vt_symbol] = bar.high_price
-            self.intra_trade_low[vt_symbol] = bar.low_price
 
             # 根据ATR和风险敞口计算固定仓位大小
             contract_size = self.get_size(vt_symbol)  # 获取合约乘数
@@ -170,6 +158,8 @@ class TrendFollowingStrategy(StrategyTemplate):
             else:
                 self.fixed_size[vt_symbol] = 0  # 如果ATR过小，则不开仓
 
+            current_pos = self.get_pos(vt_symbol)
+            # if current_pos == 0:
             if self.atr_data[vt_symbol] > self.atr_ma[vt_symbol]:
                 if (
                     self.rsi_data[vt_symbol] > self.rsi_buy
@@ -184,54 +174,35 @@ class TrendFollowingStrategy(StrategyTemplate):
                 ):
                     self.set_target(vt_symbol, -self.fixed_size[vt_symbol])
 
-            safety_stop_width = self.atr_data[vt_symbol] * self.stop_factor
-
-            current_pos = self.get_pos(vt_symbol)
-
-            # 检查是否触发保命止损
-            if current_pos == 0:
-                # 空仓时，同时重置高低点为当前价格
-                self.intra_trade_high[vt_symbol] = bar.high_price
-                self.intra_trade_low[vt_symbol] = bar.low_price
-            elif current_pos > 0:
-                # 记录持仓期间最高价
+            if current_pos > 0:
                 self.intra_trade_high[vt_symbol] = max(
-                    self.intra_trade_high.get(vt_symbol, 0), bar.high_price
+                    self.intra_trade_high[vt_symbol], bar.high_price
                 )
-                # 将低点重置为当前低点。
                 self.intra_trade_low[vt_symbol] = bar.low_price
-                # 吊灯止损
-                stop_price = self.intra_trade_high[vt_symbol] - safety_stop_width
 
-                if bar.close_price < stop_price:
-                    self.set_target(vt_symbol, 0)  # 强制平仓
-                    # 触发止损后，锁住多头开仓权限
-                    self.long_stopped[vt_symbol] = True
-                    self.write_log(
-                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(多)，暂停做多直到RSI回归中性"
-                    )
-                    print(
-                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(多)，暂停做多直到RSI回归中性"
-                    )
+                long_stop = self.intra_trade_high[vt_symbol] * (
+                    1 - self.trailing_percent / 100
+                )
+
+                if bar.close_price <= long_stop:
+                    self.set_target(vt_symbol, 0)
+                    # 重置高点为当前价格
+                    self.intra_trade_high[vt_symbol] = bar.high_price
 
             elif current_pos < 0:
                 self.intra_trade_low[vt_symbol] = min(
-                    self.intra_trade_low.get(vt_symbol, 999999), bar.low_price
+                    self.intra_trade_low[vt_symbol], bar.low_price
                 )
-                # 将高点重置为当前高点。
                 self.intra_trade_high[vt_symbol] = bar.high_price
-                stop_price = self.intra_trade_low[vt_symbol] + safety_stop_width
 
-                if bar.close_price > stop_price:
-                    self.set_target(vt_symbol, 0)  # 强制平仓
-                    # 触发止损后，锁住空头开仓权限
-                    self.short_stopped[vt_symbol] = True
-                    self.write_log(
-                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(空)，暂停做空直到RSI回归中性"
-                    )
-                    print(
-                        f"{bar.datetime.strftime('%Y-%m-%d %H:%M:%S')} {vt_symbol} 触发保命止损(空)，暂停做空直到RSI回归中性"
-                    )
+                short_stop = self.intra_trade_low[vt_symbol] * (
+                    1 + self.trailing_percent / 100
+                )
+
+                if bar.close_price >= short_stop:
+                    self.set_target(vt_symbol, 0)
+                    # 重置低点为当前价格
+                    self.intra_trade_low[vt_symbol] = bar.low_price
 
         self.rebalance_portfolio(bars)
 
