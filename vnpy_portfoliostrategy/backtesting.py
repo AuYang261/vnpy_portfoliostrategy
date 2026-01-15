@@ -938,15 +938,22 @@ class PortfolioDailyResult:
                 )
 
 
+@lru_cache(maxsize=999)
+def load_bar_data(
+    vt_symbol: str, interval: Interval, start: datetime, end: datetime
+) -> list[BarData]:
+    return _load_bar_data_disk(vt_symbol, interval, start, end)
+
+
 from joblib import Memory
 
-_disk_cache = Memory(location="/home/xjy/quant/.cache/load_bar_data", verbose=0)
-# 清理缓存：rm -rf /home/xjy/quant/.cache/load_bar_data
+# 落盘缓存防止重启后丢失
+# 清理缓存：rm -rf ~/.cache/load_bar_data
+_disk_cache = Memory(location="~/.cache/load_bar_data", verbose=0)
 
 
-# @lru_cache(maxsize=999)
 @_disk_cache.cache
-def load_bar_data(
+def _load_bar_data_disk(
     vt_symbol: str, interval: Interval, start: datetime, end: datetime
 ) -> list[BarData]:
     """通过数据库获取历史数据"""
