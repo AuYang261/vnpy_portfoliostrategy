@@ -4,12 +4,14 @@ from functools import lru_cache, partial
 from copy import copy
 import traceback
 import math
-
+import os
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pandas import DataFrame
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 from vnpy.trader.constant import Direction, Offset, Interval, Status
 from vnpy.trader.database import get_database, BaseDatabase
@@ -148,55 +150,120 @@ class BacktestingEngine:
         self.history_data.clear()
         self.dts.clear()
 
-        # 每次加载30天历史数据
-        progress_delta: timedelta = timedelta(days=30)
+        # 每次加载30天历史数据(经测试，这个参数对速度影响不大)
+        progress_delta: timedelta = timedelta(days=30 * 12)
         total_delta: timedelta = self.end - self.start
         interval_delta: timedelta = INTERVAL_DELTA_MAP[self.interval]
 
-        for vt_symbol in self.vt_symbols:
-            if self.interval == Interval.MINUTE:
-                start: datetime = self.start
-                end: datetime = self.start + progress_delta
-                progress: float = 0
+        start_time = time.time()
 
-                data_count = 0
-                while start < self.end:
-                    end = min(end, self.end)
+        # 经测试，并行反而更慢
+        if False:
 
-                    data: list[BarData] = load_bar_data(
-                        vt_symbol, self.interval, start, end
+            def _load_one_symbol(vt_symbol: str) -> tuple[str, list[BarData]]:
+                def _iter_time_slices(
+                    start: datetime,
+                    end: datetime,
+                    step: timedelta,
+                    interval_delta: timedelta,
+                ) -> list[tuple[datetime, datetime]]:
+                    """生成[start, end]的分片区间列表（保持与你原来的推进逻辑一致）"""
+                    slices: list[tuple[datetime, datetime]] = []
+                    s: datetime = start
+                    e: datetime = start + step
+                    while s < end:
+                        e = min(e, end)
+                        slices.append((s, e))
+                        s = e + interval_delta
+                        e += step + interval_delta
+                    return slices
+
+                """在线程池中执行：拉取单个 vt_symbol 的全量 bars（可能分片）"""
+                if self.interval == Interval.MINUTE:
+                    bars_all: list[BarData] = []
+                    for s, e in _iter_time_slices(
+                        self.start, self.end, progress_delta, interval_delta
+                    ):
+                        bars_all.extend(load_bar_data(vt_symbol, self.interval, s, e))
+                    return vt_symbol, bars_all
+                else:
+                    bars = load_bar_data(vt_symbol, self.interval, self.start, self.end)
+                    return vt_symbol, bars
+
+            # 并发拉取（只做“获取数据”，不并发写入 history_data/dts）
+            # max_load_workers 建议 4~8；过大可能导致 DB/磁盘抖动，反而更慢
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                futures = {
+                    ex.submit(_load_one_symbol, vt_symbol): vt_symbol
+                    for vt_symbol in self.vt_symbols
+                }
+
+                for fut in as_completed(futures):
+                    vt_symbol = futures[fut]
+                    try:
+                        sym, bars = fut.result()
+                    except Exception:
+                        # 保留 vt_symbol 信息，方便定位哪个合约失败
+                        self.output(_("{} 历史数据加载失败").format(vt_symbol))
+                        self.output(traceback.format_exc())
+                        raise
+
+                    # 单线程写入，避免并发写 dict/set
+                    data_count = 0
+                    for bar in bars:
+                        self.dts.add(bar.datetime)
+                        self.history_data[(bar.datetime, sym)] = bar
+                        data_count += 1
+
+                    # 进度输出：这里按“合约完成数”输出更准确
+                    self.output(
+                        _("{}历史数据加载完成，数据量：{}").format(sym, data_count)
                     )
+        else:
+            for vt_symbol in self.vt_symbols:
+                if self.interval == Interval.MINUTE:
+                    start: datetime = self.start
+                    end: datetime = self.start + progress_delta
+                    progress: float = 0
+
+                    data_count = 0
+                    while start < self.end:
+                        end = min(end, self.end)
+
+                        data: list[BarData] = load_bar_data(
+                            vt_symbol, self.interval, start, end
+                        )
+
+                        for bar in data:
+                            self.dts.add(bar.datetime)
+                            self.history_data[(bar.datetime, vt_symbol)] = bar
+                            data_count += 1
+
+                        progress += progress_delta / total_delta
+                        progress = min(progress, 1)
+                        progress_bar = "#" * int(progress * 10)
+                        self.output(
+                            _("{}加载进度：{} [{:.0%}]").format(
+                                vt_symbol, progress_bar, progress
+                            )
+                        )
+
+                        start = end + interval_delta
+                        end += progress_delta + interval_delta
+                else:
+                    data = load_bar_data(vt_symbol, self.interval, self.start, self.end)
 
                     for bar in data:
                         self.dts.add(bar.datetime)
                         self.history_data[(bar.datetime, vt_symbol)] = bar
-                        data_count += 1
 
-                    progress += progress_delta / total_delta
-                    progress = min(progress, 1)
-                    progress_bar = "#" * int(progress * 10)
-                    self.output(
-                        _("{}加载进度：{} [{:.0%}]").format(
-                            vt_symbol, progress_bar, progress
-                        )
-                    )
+                    data_count = len(data)
 
-                    start = end + interval_delta
-                    end += progress_delta + interval_delta
-            else:
-                data = load_bar_data(vt_symbol, self.interval, self.start, self.end)
+                self.output(
+                    _("{}历史数据加载完成，数据量：{}").format(vt_symbol, data_count)
+                )
 
-                for bar in data:
-                    self.dts.add(bar.datetime)
-                    self.history_data[(bar.datetime, vt_symbol)] = bar
-
-                data_count = len(data)
-
-            self.output(
-                _("{}历史数据加载完成，数据量：{}").format(vt_symbol, data_count)
-            )
-
-        self.output(_("所有历史数据加载完成"))
+        self.output(_("所有历史数据加载完成") + f"，用时{time.time()-start_time:.2f}s")
 
     def run_backtesting(self) -> None:
         """开始回测"""
@@ -325,6 +392,7 @@ class BacktestingEngine:
         return_std: float = 0
         sharpe_ratio: float = -math.inf
         calmar_ratio: float = -math.inf
+        sharpe_calmar_mean: float = -math.inf
         return_drawdown_ratio: float = -math.inf
 
         # 检查是否发生过爆仓
@@ -398,6 +466,11 @@ class BacktestingEngine:
             calmar_ratio = (
                 -annual_return / max_ddpercent if max_ddpercent != 0 else -math.inf
             )
+            sharpe_calmar_mean = (
+                (sharpe_ratio + calmar_ratio) / 2
+                if calmar_ratio != -math.inf
+                else -math.inf
+            )
 
             return_drawdown_ratio = -total_net_pnl / max_drawdown
 
@@ -436,6 +509,7 @@ class BacktestingEngine:
             self.output(_("收益标准差：\t{:,.2f}%").format(return_std))
             self.output(_("Sharpe比率：\t{:,.2f}").format(sharpe_ratio))
             self.output(_("Calmar比率：\t{:,.2f}").format(calmar_ratio))
+            self.output(_("夏普/卡玛比率均值：\t{:,.2f}").format(sharpe_calmar_mean))
             self.output(_("收益回撤比：\t{:,.2f}").format(return_drawdown_ratio))
 
         statistics: dict = {
@@ -465,6 +539,7 @@ class BacktestingEngine:
             "return_std": return_std,
             "sharpe_ratio": sharpe_ratio,
             "calmar_ratio": calmar_ratio,
+            "sharpe_calmar_mean": sharpe_calmar_mean,
             "return_drawdown_ratio": return_drawdown_ratio,
         }
 
@@ -942,14 +1017,17 @@ class PortfolioDailyResult:
 def load_bar_data(
     vt_symbol: str, interval: Interval, start: datetime, end: datetime
 ) -> list[BarData]:
+    print("Load from disk cache", vt_symbol, interval, start, end)
     return _load_bar_data_disk(vt_symbol, interval, start, end)
 
 
 from joblib import Memory
 
 # 落盘缓存防止重启后丢失
-# 清理缓存：rm -rf ~/.cache/load_bar_data
-_disk_cache = Memory(location="~/.cache/load_bar_data", verbose=0)
+# 清理缓存：rm -rf /home/xjy/.cache/load_bar_data
+_disk_cache = Memory(
+    location=os.path.dirname(__file__) + "/.cache/load_bar_data", verbose=0
+)
 
 
 @_disk_cache.cache
@@ -957,6 +1035,7 @@ def _load_bar_data_disk(
     vt_symbol: str, interval: Interval, start: datetime, end: datetime
 ) -> list[BarData]:
     """通过数据库获取历史数据"""
+    print("Load from db", vt_symbol, interval, start, end)
     symbol, exchange = extract_vt_symbol(vt_symbol)
 
     database: BaseDatabase = get_database()
@@ -964,6 +1043,17 @@ def _load_bar_data_disk(
     bars: list[BarData] = database.load_bar_data(symbol, exchange, interval, start, end)
 
     return bars
+
+
+_WORKER_ENGINE: BacktestingEngine | None = None
+_WORKER_DATA_KEY: tuple | None = None
+
+
+def _make_data_key(
+    vt_symbols: list[str], interval: Interval, start: datetime, end: datetime
+) -> tuple:
+    # vt_symbols 顺序影响 key，建议排序保证稳定
+    return (tuple(sorted(vt_symbols)), interval.value, start, end)
 
 
 def evaluate(
@@ -985,8 +1075,15 @@ def evaluate(
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-    engine: BacktestingEngine = BacktestingEngine()
-    engine.output = lambda msg: None  # Disable engine internal output
+    global _WORKER_ENGINE, _WORKER_DATA_KEY
+
+    data_key = _make_data_key(vt_symbols, interval, start, end)
+
+    if _WORKER_ENGINE is None:
+        _WORKER_ENGINE = BacktestingEngine()
+        _WORKER_ENGINE.output = lambda msg: None
+
+    engine = _WORKER_ENGINE
 
     engine.set_parameters(
         vt_symbols=vt_symbols,
@@ -1000,13 +1097,16 @@ def evaluate(
         end=end,
     )
 
+    # 清理上次回测产生的成交/订单/日结果等
+    engine.clear_data()
+
     engine.add_strategy(strategy_class, setting)
-    engine.load_data()
+    if _WORKER_DATA_KEY != data_key:
+        engine.load_data()
+        _WORKER_DATA_KEY = data_key
     engine.run_backtesting()
     engine.calculate_result()
     statistics: dict = engine.calculate_statistics(output=False)
-    engine.history_data.clear()
-    engine.dts.clear()
 
     target_value: float = statistics[target_name]
     return (str(setting), target_value, statistics)

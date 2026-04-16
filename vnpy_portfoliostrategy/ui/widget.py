@@ -134,6 +134,7 @@ class PortfolioStrategyManager(QtWidgets.QWidget):
         if n == editor.DialogCode.Accepted:
             setting: dict = editor.get_setting()
             vt_symbols: list[str] = setting.pop("vt_symbols").split(",")
+            vt_symbols = list(map(lambda s: s.strip(), vt_symbols))
             strategy_name: str = setting.pop("strategy_name")
 
             self.strategy_engine.add_strategy(
@@ -195,6 +196,11 @@ class StrategyManager(QtWidgets.QFrame):
         self.cover_button.clicked.connect(self.cover_strategy)
         self.cover_button.setEnabled(False)
 
+        self.copy_button: QtWidgets.QPushButton = QtWidgets.QPushButton(
+            _("改主力(TODO)")
+        )
+        self.copy_button.clicked.connect(self.copy_strategy)
+
         strategy_name: str = self._data["strategy_name"]
         class_name: str = self._data["class_name"]
         author: str = self._data["author"]
@@ -229,6 +235,7 @@ class StrategyManager(QtWidgets.QFrame):
         hbox.addWidget(self.edit_button)
         hbox.addWidget(self.remove_button)
         hbox.addWidget(self.cover_button)
+        hbox.addWidget(self.copy_button)
 
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.addWidget(label)
@@ -308,6 +315,34 @@ class StrategyManager(QtWidgets.QFrame):
     def cover_strategy(self) -> None:
         """平仓策略"""
         self.strategy_engine.close_all_positions(self.strategy_name)
+
+    def copy_strategy(self) -> None:
+        """复制策略"""
+        print(self._data)
+        class_name: str = self._data["class_name"]
+        if not class_name:
+            return
+
+        strategy_name: str = self._data["strategy_name"]
+        parameters: dict = self.strategy_engine.get_strategy_parameters(strategy_name)
+        editor: SettingEditor = SettingEditor(
+            parameters,
+            class_name=class_name,
+            vt_symbols=self.strategy_engine.get_strategy_vt_symbols(strategy_name),
+            strategy_name=strategy_name,
+        )
+        n: int = editor.exec_()
+
+        if n == editor.DialogCode.Accepted:
+            setting: dict = editor.get_setting()
+            vt_symbols: list[str] = setting.pop("vt_symbols").split(",")
+            new_strategy_name: str = setting.pop("strategy_name")
+
+            self.strategy_engine.add_strategy(
+                class_name, new_strategy_name, vt_symbols, setting
+            )
+            data = self.strategy_engine.get_strategy_data(strategy_name)
+            self.strategy_engine.set_pos_data(new_strategy_name, data["pos_data"])
 
 
 class DataMonitor(QtWidgets.QTableWidget):
@@ -414,7 +449,11 @@ class SettingEditor(QtWidgets.QDialog):
     """配置编辑框"""
 
     def __init__(
-        self, parameters: dict, strategy_name: str = "", class_name: str = ""
+        self,
+        parameters: dict,
+        strategy_name: str = "",
+        class_name: str = "",
+        vt_symbols: list[str] = [],
     ) -> None:
         """构造函数"""
         super().__init__()
@@ -422,6 +461,7 @@ class SettingEditor(QtWidgets.QDialog):
         self.parameters: dict = parameters
         self.strategy_name: str = strategy_name
         self.class_name: str = class_name
+        self.vt_symbols = vt_symbols
 
         self.edits: dict = {}
 
@@ -434,7 +474,10 @@ class SettingEditor(QtWidgets.QDialog):
         if self.class_name:
             self.setWindowTitle(_("添加策略：{}").format(self.class_name))
             button_text: str = _("添加")
-            parameters: dict = {"strategy_name": "", "vt_symbols": ""}
+            parameters: dict = {
+                "strategy_name": self.strategy_name,
+                "vt_symbols": ",".join(self.vt_symbols),
+            }
             parameters.update(self.parameters)
         else:
             self.setWindowTitle(_("参数编辑：{}").format(self.strategy_name))
@@ -461,6 +504,8 @@ class SettingEditor(QtWidgets.QDialog):
         form.addRow(button)
 
         self.setLayout(form)
+        self.adjustSize()
+        self.setFixedWidth(1500)
 
     def get_setting(self) -> dict:
         """获取策略配置"""

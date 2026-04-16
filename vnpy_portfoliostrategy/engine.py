@@ -476,6 +476,14 @@ class StrategyEngine(BaseEngine):
         self.save_strategy_setting()
         self.put_strategy_event(strategy)
 
+    def set_pos_data(self, strategy_name: str, pos_data: dict[str, int]) -> None:
+        """设置策略的pos_data"""
+        strategy: StrategyTemplate = self.strategies[strategy_name]
+        strategy.pos_data = pos_data
+
+        self.sync_strategy_data(strategy)
+        self.put_strategy_event(strategy)
+
     def remove_strategy(self, strategy_name: str) -> bool:
         """移除策略实例"""
         strategy: StrategyTemplate = self.strategies[strategy_name]
@@ -589,6 +597,14 @@ class StrategyEngine(BaseEngine):
         """获取策略参数"""
         strategy: StrategyTemplate = self.strategies[strategy_name]
         return strategy.get_parameters()
+
+    def get_strategy_vt_symbols(self, strategy_name: str) -> list[str]:
+        """获取策略vt_symbols"""
+        return self.strategies[strategy_name].vt_symbols
+
+    def get_strategy_data(self, strategy_name: str) -> dict:
+        """获取策略数据(pos_data, target_data)"""
+        return self.strategy_data[strategy_name]
 
     def init_all_strategies(self) -> None:
         """初始化所有策略"""

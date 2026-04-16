@@ -21,10 +21,10 @@ class DoubleMaPortfolioStrategy(StrategyTemplate):
     author = "量化交易员"
 
     # 策略参数
-    fast_window = 20  # 快线周期
-    slow_window = 60  # 慢线周期
-    atr_window = 14  # ATR周期（用于计算仓位）
-    risk_per_trade = 2500  # 单笔交易风险敞口（元）
+    fast_window = 13  # 快线周期
+    slow_window = 235  # 慢线周期
+    atr_window = 20  # ATR周期（用于计算仓位）
+    risk_per_trade = 4000  # 单笔交易风险敞口（元）
     price_add = 3  # 下单超价
 
     fixed_size_min = 1  # 最小开仓手数
@@ -73,6 +73,7 @@ class DoubleMaPortfolioStrategy(StrategyTemplate):
             on_window_bars=self.on_window_bars,
             interval=self.interval,
         )
+        self.last_balance = 0
 
     def on_init(self) -> None:
         """策略初始化回调"""
@@ -95,6 +96,15 @@ class DoubleMaPortfolioStrategy(StrategyTemplate):
     def on_bars(self, bars: dict[str, BarData]) -> None:
         """K线切片回调（分钟）"""
         self.pbg.update_bars(bars)
+        # 有未提交的订单连续5分钟都没提交成功，重新发起提交
+        if len(self.active_orderids) > 0:
+            if self.last_balance > 5:
+                self.rebalance_portfolio(bars)
+                self.last_balance = 0
+            else:
+                self.last_balance += 1
+        else:
+            self.last_balance = 0
 
     def on_window_bars(self, bars: dict[str, BarData]) -> None:
         """小时K线逻辑"""
@@ -143,6 +153,7 @@ class DoubleMaPortfolioStrategy(StrategyTemplate):
 
         # 4. 组合下单再平衡
         self.rebalance_portfolio(bars)
+        self.last_balance = 0
         self.put_event()
 
     def calculate_price(

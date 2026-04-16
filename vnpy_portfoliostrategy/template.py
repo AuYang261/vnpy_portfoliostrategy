@@ -4,6 +4,7 @@ import time
 from copy import copy
 from collections import defaultdict
 from typing import Any, cast
+import re
 
 from vnpy.trader.constant import Interval, Direction, Offset
 from vnpy.trader.object import BarData, TickData, OrderData, TradeData
@@ -38,7 +39,6 @@ class StrategyTemplate(ABC):
         # 持仓数据字典
         self.pos_data: dict[str, int] = defaultdict(int)  # 实际持仓
         self.target_data: dict[str, int] = defaultdict(int)  # 目标持仓
-        self.cnt: dict[str, int] = defaultdict(int)  # on_bars调用次数
 
         # 委托缓存容器
         self.orders: dict[str, OrderData] = {}
@@ -49,7 +49,6 @@ class StrategyTemplate(ABC):
             "trading",
             "pos_data",
             "target_data",
-            "cnt",
         ]
 
         # 设置策略参数
@@ -106,6 +105,7 @@ class StrategyTemplate(ABC):
             "parameters": self.get_parameters(),
             "default_variables": self.get_default_variables(),
             "variables": self.get_variables(),
+            "pos_data": self.pos_data,
         }
         return strategy_data
 
@@ -247,12 +247,6 @@ class StrategyTemplate(ABC):
         """设置目标仓位"""
         self.target_data[vt_symbol] = target
 
-    def add_cnt(self, vt_symbol: str) -> None:
-        self.cnt[vt_symbol] += 1
-
-    def get_cnt(self) -> dict[str, int]:
-        return self.cnt
-
     def rebalance_portfolio(self, bars: dict[str, BarData]) -> None:
         """基于目标执行调仓交易"""
         self.cancel_all()
@@ -387,15 +381,23 @@ class StrategyTemplate(ABC):
             try:
                 date = rqdatac.get_future_latest_trading_date().strftime("%Y%m%d")
             except Exception as ex:
-                self.write_log(
-                    f"获取最新交易日期失败，无法查询主力合约，错误信息：{ex}"
-                )
+                self.write_log(f"获取最新交易日期失败，错误信息：{ex}")
                 return None
-            rq_symbol_serial = rqdatac.futures.get_dominant(symbol, start_date=date)
+            try:
+                rq_symbol_serial = rqdatac.futures.get_dominant(symbol, start_date=date)
+            except Exception as ex:
+                self.write_log(f"查询主力合约失败，错误信息：{ex}")
+                return None
             if rq_symbol_serial is not None and not rq_symbol_serial.empty:
-                rq_symbol = rq_symbol_serial.loc[date]
-            dominant_vt_symbol = f"{rq_symbol}.{exchange}"
-            dominant_list.append(dominant_vt_symbol)
+                rq_symbol: str = rq_symbol_serial.loc[date]
+                if exchange == "CZCE":
+                    # 删掉第一个数字
+                    rq_symbol = re.sub(r"\d", "", rq_symbol, count=1)
+                elif exchange in ["DCE", "SHFE"]:
+                    # 改为小写
+                    rq_symbol = rq_symbol.lower()
+                dominant_vt_symbol = f"{rq_symbol}.{exchange}"
+                dominant_list.append(dominant_vt_symbol)
 
         return dominant_list
 
@@ -410,6 +412,9 @@ class StrategyTemplate(ABC):
                 if dominant_list:
                     dominant_str = ", ".join(dominant_list)
                     self.write_log(f"主力合约：{dominant_str}")
+                    print(f"主力合约：{dominant_str}")
+                    # 改为全大写方便比较
+                    dominant_list = list(map(lambda s: s.upper(), dominant_list))
                     for vt_symbol in self.vt_symbols:
                         if vt_symbol.upper() not in dominant_list:
                             self.write_log(f"注意，当前{vt_symbol} 不是主力合约")

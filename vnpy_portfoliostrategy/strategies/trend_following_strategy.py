@@ -117,7 +117,6 @@ class TrendFollowingStrategy(StrategyTemplate):
         """小时K线回调"""
         tmp_price_add = self.price_add
         for vt_symbol, bar in bars.items():
-            self.add_cnt(vt_symbol)
             am: ArrayManager = self.ams[vt_symbol]
             am.update_bar(bar)
 
@@ -139,7 +138,6 @@ class TrendFollowingStrategy(StrategyTemplate):
                         1,
                         self.risk_per_trade
                         / (self.atr_data[vt_symbol] * contract_size),
-                        # * (1 - np.exp(-self.cnt[vt_symbol] / self.decay_factor)),
                     )
                 )
             else:
